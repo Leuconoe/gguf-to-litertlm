@@ -1,100 +1,99 @@
 # gguf-to-litertlm
 
-Utilities for converting Gemma4 GGUF checkpoints into a Hugging Face-style
-safetensors directory and then exporting a Google AI Edge Gallery-compatible
-`.litertlm` bundle.
+Single-command workflow for converting a Gemma4 GGUF model into a Google AI
+Edge Gallery-compatible `.litertlm` bundle.
 
-This repository does not include model weights. Keep `.gguf`, `.safetensors`,
-`.tflite`, and `.litertlm` files outside git.
+The main entrypoint is one file:
 
-## What This Handles
+```powershell
+python gguf_to_litertlm.py --input model.gguf --output model.litertlm
+```
 
-- Converts quantized GGUF tensors to sharded FP16/FP32 safetensors.
-- Repackages HauhauCS Gemma4 text tensors into Hugging Face Gemma4 names.
-- Adds Gemma4 `mmproj` vision tensors.
-- Fixes the vision patch projection layout:
-  GGUF stores `v.patch_embd.weight` as `OIHW`, while Gemma4 image preprocessing
-  flattens patches as `HW_C`. The repacker converts `OIHW -> OHWI -> flatten`.
-- Provides a small Gemma4 vision LiteRT-LM metadata file with
-  `max_num_patches=1260`.
+Model weights are not included. Keep `.gguf`, `.safetensors`, `.tflite`, and
+`.litertlm` files outside git.
+
+## Features
+
+- Converts the text GGUF to sharded safetensors.
+- Repackages text tensors into Hugging Face Gemma4 tensor names.
+- Optionally adds a Gemma4 `mmproj` vision encoder.
+- Fixes the Gemma4 vision patch projection layout:
+  GGUF stores `v.patch_embd.weight` as `OIHW`, but Gemma4 image patches are
+  flattened as `HW_C`.
+- Runs `litert-torch export_hf` automatically, using Docker by default.
+- Bundles the exported TFLite files into `.litertlm`.
+- Embeds the Gemma4 vision LiteRT metadata in the Python file, so there is no
+  separate metadata protobuf to manage.
 
 ## Requirements
 
-Local conversion scripts:
+Install the local preprocessing dependencies:
 
 ```powershell
 uv venv --python 3.12 .venv
 uv pip install --python .\.venv\Scripts\python.exe -r requirements.txt
 ```
 
-LiteRT export currently works best from Linux. On Windows, use Docker:
+For the LiteRT export step on Windows, Docker is the default and recommended
+mode. The script runs the long Docker command internally.
+
+The final bundling step uses:
 
 ```powershell
-docker run --rm -v "${PWD}:/work" -w /work python:3.12-slim sh -lc "python -m pip install --upgrade pip && pip install --pre litert-torch pillow torchvision && litert-torch export_hf /work/converted/gemma4-hf-vision /work/converted/gemma4-export --task=image_text_to_text --export_vision_encoder=True --externalize_embedder=True --bundle_litert_lm=False --keep_temporary_files=True"
+uv tool run litert-lm-builder
 ```
 
-## Workflow
+## Metadata Directory
 
-1. Convert the text GGUF to sharded safetensors:
+The script needs a small Hugging Face metadata/tokenizer directory from the
+matching Gemma4 base model. By default it looks for:
+
+```text
+hf_base_metadata/gemma-4-e2b-it
+```
+
+That directory should include files such as:
+
+- `config.json`
+- `tokenizer.json`
+- `tokenizer_config.json`
+- `processor_config.json`
+- `chat_template.jinja`
+
+You can override it with `--metadata-dir`.
+
+## Vision Bundle
 
 ```powershell
-.\.venv\Scripts\python scripts\gguf_to_safetensors.py `
+.\.venv\Scripts\python gguf_to_litertlm.py `
   --input Gemma-4-E2B-Uncensored-HauhauCS-Aggressive-Q3_K_P.gguf `
-  --output converted\gemma4-q3-fp16 `
-  --dtype fp16 `
-  --shard-size-gb 6
+  --vision-encoder mmproj-Gemma-4-E2B-Uncensored-HauhauCS-Aggressive-f16.gguf `
+  --output converted\gemma4-gallery-vision.litertlm `
+  --metadata-dir hf_base_metadata\gemma-4-e2b-it `
+  --force
 ```
 
-2. Prepare a metadata directory from the matching base Hugging Face Gemma4 model.
-   It should include files such as `config.json`, `tokenizer.json`,
-   `tokenizer_config.json`, `processor_config.json`, and `chat_template.jinja`.
+This is the recommended path for Google AI Edge Gallery image-text use.
 
-3. Repack text tensors into Hugging Face names:
+## Common Options
 
-```powershell
-.\.venv\Scripts\python scripts\repack_gemma4_text_for_hf.py `
-  --source converted\gemma4-q3-fp16 `
-  --metadata hf_base_metadata\gemma-4-e2b-it `
-  --output converted\gemma4-hf-text `
-  --shard-size-gb 6
-```
-
-4. Convert the mmproj GGUF:
-
-```powershell
-.\.venv\Scripts\python scripts\gguf_to_safetensors.py `
-  --input mmproj-Gemma-4-E2B-Uncensored-HauhauCS-Aggressive-f16.gguf `
-  --output converted\gemma4-mmproj-fp16 `
-  --dtype fp16 `
-  --shard-size-gb 6
-```
-
-5. Add vision tensors:
-
-```powershell
-.\.venv\Scripts\python scripts\repack_gemma4_mmproj_for_hf.py `
-  --text-hf converted\gemma4-hf-text `
-  --mmproj converted\gemma4-mmproj-fp16 `
-  --output converted\gemma4-hf-vision
-```
-
-6. Export TFLite files with `litert-torch export_hf` using the Docker command
-   above.
-
-7. Bundle the exported TFLite files into `.litertlm`:
-
-```powershell
-.\scripts\build_litertlm.ps1 `
-  -ExportDir converted\gemma4-export `
-  -TokenizerJson hf_base_metadata\gemma-4-e2b-it\tokenizer.json `
-  -Output converted\gemma4-gallery-vision.litertlm
-```
+- `--input`: text model GGUF.
+- `--output`: final `.litertlm` file.
+- `--vision-encoder`: optional Gemma4 `mmproj` GGUF. Required for image input.
+- `--metadata-dir`: Hugging Face metadata/tokenizer directory.
+- `--work-dir`: intermediate output directory. Default:
+  `converted/gguf-to-litertlm-work`.
+- `--dtype fp16|fp32`: safetensors dtype before LiteRT export. Default: `fp16`.
+- `--export-mode docker|local|skip`: Docker is default.
+- `--skip-bundle`: stop after TFLite export.
+- `--force`: rebuild generated intermediate directories.
 
 ## Notes
 
 - The tested Google AI Edge Gallery path used INT8 dynamic-range TFLite files.
-- For GPU in Edge Gallery, forcing GPU in the app can work when the device
-  delegate accepts the generated LiteRT model. FP16/mixed-precision export may
-  be useful for GPU-first experiments, but it produces much larger files.
+- GPU execution can work in Edge Gallery when GPU is forced in the app and the
+  device delegate accepts the generated LiteRT model.
 - Q4/FP8 GGUF quantization formats are not directly preserved in `.litertlm` by
-  these scripts. LiteRT export uses its own TFLite quantization recipes.
+  this workflow. LiteRT export applies its own TFLite quantization recipes.
+- Text-only export can produce TFLite files, but this repository currently
+  bundles the vision path manually because that is the tested Gallery workflow.
