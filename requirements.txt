@@ -1,0 +1,3 @@
+numpy<2
+safetensors>=0.4.5
+gguf>=0.14.0
