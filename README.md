@@ -64,6 +64,15 @@ You can override it with `--metadata-dir`.
 
 ## Vision Bundle
 
+The following model was used as a working conversion example:
+
+```text
+https://huggingface.co/HauhauCS/Gemma-4-E2B-Uncensored-HauhauCS-Aggressive
+```
+
+The tested setup used the `Q3_K_P` text GGUF and the matching `mmproj` vision
+encoder GGUF from that model page.
+
 ```powershell
 .\.venv\Scripts\python gguf_to_litertlm.py `
   --input Gemma-4-E2B-Uncensored-HauhauCS-Aggressive-Q3_K_P.gguf `
